@@ -301,10 +301,11 @@ async function dbUpsert(table, data, opts, cacheKey){
     return true;
   }
 }
-function getPendingInsertsForTable(table){
-  return getQueue().filter(op => op.table === table && op.action === 'insert').map(op => op.data);
+function getPendingInsertsForTable(table, matchFn){
+  const items = getQueue().filter(op => op.table === table && op.action === 'insert').map(op => op.data);
+  return matchFn ? items.filter(matchFn) : items;
 }
-async function dbSelect(table, queryFn, cacheKey){
+async function dbSelect(table, queryFn, cacheKey, pendingMatch){
   let data = [];
   if(!sb || !navigator.onLine){
     data = (cacheKey ? lsGet(cacheKey) : null) || [];
@@ -322,9 +323,9 @@ async function dbSelect(table, queryFn, cacheKey){
   }
   // Mezcla lo que todavía está pendiente de sincronizar, para no "perder" de vista
   // algo recién creado mientras la sincronización sigue reintentando.
-  const pending = getPendingInsertsForTable(table);
+  const pending = getPendingInsertsForTable(table, pendingMatch);
   for(const p of pending){
-    const already = data.find(d => (p.email && d.email === p.email) || (p.id && d.id === p.id));
+    const already = data.find(d => (p.email && d.email === p.email && p.id === undefined) || (p.id && d.id === p.id));
     if(!already) data.push(p);
   }
   return data;
@@ -464,18 +465,36 @@ const FOOD_DB = {
   "Palta (1/2 unidad)": 120, "Almendras (puñado)": 170
 };
 
+function findFoodMatch(name){
+  const clean = name.trim().toLowerCase();
+  // 1) coincidencia exacta (ignorando mayúsculas/minúsculas)
+  for(const key of Object.keys(FOOD_DB)){
+    if(key.toLowerCase() === clean) return {key, cal: FOOD_DB[key]};
+  }
+  // 2) el texto escrito está contenido en algún nombre de la base, o viceversa
+  for(const key of Object.keys(FOOD_DB)){
+    const keyLower = key.toLowerCase();
+    if(keyLower.includes(clean) || clean.includes(keyLower)) return {key, cal: FOOD_DB[key]};
+  }
+  return null;
+}
+
 async function addFood(){
   const nameInput = document.getElementById('foodName');
   const calInput = document.getElementById('foodCal');
+  const warnEl = document.getElementById('foodNoMatchWarn');
   const name = nameInput.value.trim();
   if(!name){ toast('Contame qué comiste'); return; }
   let cal = parseFloat(calInput.value);
+  if(warnEl) warnEl.classList.add('hidden');
   if(!cal){
-    if(FOOD_DB[name] !== undefined){
-      cal = FOOD_DB[name];
-      toast(`${cal} kcal (base local)`);
+    const match = findFoodMatch(name);
+    if(match){
+      cal = match.cal;
+      toast(`${cal} kcal (base local: "${match.key}")`);
     } else {
-      toast('No la tengo en la base — poné las kcal a mano esta vez');
+      if(warnEl) warnEl.classList.remove('hidden');
+      calInput.focus();
       return;
     }
   }
@@ -518,7 +537,8 @@ async function renderHoy(){
   const el = document.getElementById('screenHoy');
   el.innerHTML = '<div class="empty">Cargando…</div>';
   const cacheKey = 'entries_'+currentUser.email+'_'+today();
-  const entries = await dbSelect('bitacora_entries', q=>q.eq('email', currentUser.email).eq('entry_date', today()), cacheKey);
+  const entries = await dbSelect('bitacora_entries', q=>q.eq('email', currentUser.email).eq('entry_date', today()), cacheKey,
+    d => d.email===currentUser.email && d.entry_date===today());
   const foods = entries.filter(e=>e.entry_type==='food');
   const exercises = entries.filter(e=>e.entry_type==='exercise');
   const consumed = foods.reduce((s,f)=>s+Number(f.cal),0);
@@ -546,6 +566,9 @@ async function renderHoy(){
       <div class="note">Si está en la base local, las calorías se calculan solas al agregar.</div>
       <label>Kcal (opcional — se calcula solo si lo conocemos)</label>
       <input id="foodCal" type="number" placeholder="Se calcula solo">
+      <div id="foodNoMatchWarn" class="hidden" style="background:#3a1010; border:1px solid var(--red); padding:10px; margin-top:8px; font-size:11px; line-height:1.5;">
+        ⚠ No la tengo en la base local. Escribí las calorías vos mismo arriba y volvé a tocar "Agregar comida".
+      </div>
       <button class="btn" onclick="addFood()">Agregar comida</button>
       <div id="foodList" style="margin-top:10px;"></div>
     </div>
@@ -580,7 +603,8 @@ async function renderSemana(){
   el.innerHTML = '<div class="empty">Cargando…</div>';
   const dates = getWeekDates();
   const cacheKey = 'week_'+currentUser.email+'_'+dates[0];
-  const entries = await dbSelect('bitacora_entries', q=>q.eq('email', currentUser.email).gte('entry_date', dates[0]).lte('entry_date', dates[6]), cacheKey);
+  const entries = await dbSelect('bitacora_entries', q=>q.eq('email', currentUser.email).gte('entry_date', dates[0]).lte('entry_date', dates[6]), cacheKey,
+    d => d.email===currentUser.email && dates.includes(d.entry_date));
   const totals = dates.map(d=>entries.filter(e=>e.entry_date===d && e.entry_type==='food').reduce((s,f)=>s+Number(f.cal),0));
   const burnedTotals = dates.map(d=>entries.filter(e=>e.entry_date===d && e.entry_type==='exercise').reduce((s,f)=>s+Number(f.cal),0));
   const weekTotal = totals.reduce((a,b)=>a+b,0);
