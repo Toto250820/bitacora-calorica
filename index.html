@@ -89,7 +89,8 @@
   .modal{background:var(--surface); border:1px solid var(--olive); padding:20px; width:100%; max-width:340px;}
   .toast{position:fixed; top:14px; left:50%; transform:translateX(-50%); background:var(--olive); color:#14160F; padding:9px 16px; font-size:12px; font-family:'IBM Plex Mono',monospace; z-index:200; border-radius:2px; opacity:0; transition:opacity .25s; pointer-events:none;}
   .toast.show{opacity:1;}
-  .offline-banner{position:fixed; top:0; left:0; right:0; z-index:250; background:var(--red); color:var(--paper); text-align:center; font-size:11px; padding:8px 12px; font-family:'IBM Plex Mono',monospace;}
+  .offline-banner{position:fixed; top:0; left:0; right:0; z-index:250; background:var(--red); color:var(--paper); text-align:center; font-size:11px; padding:8px 12px; font-family:'IBM Plex Mono',monospace; cursor:pointer;}
+  .offline-banner:active{opacity:0.8;}
   .hidden{display:none !important;}
   .note{font-size:11px; color:var(--paper-dim); line-height:1.5; margin-top:4px;}
   .tracker-bg{position:fixed; inset:0; background:var(--bg); z-index:150; display:flex; flex-direction:column; padding:24px 20px; padding-bottom:calc(24px + env(safe-area-inset-bottom));}
@@ -111,7 +112,7 @@
 <body>
 
 <div id="toast" class="toast"></div>
-<div id="offlineBanner" class="offline-banner hidden"></div>
+<div id="offlineBanner" class="offline-banner hidden" onclick="manualRetrySync()"></div>
 <div id="configWarn" class="config-warn hidden">
   ⚠ Falta configurar Supabase. Abrí este archivo, buscá <code>SUPABASE_URL</code> y <code>SUPABASE_ANON_KEY</code> cerca del inicio del script, y poné los datos de tu proyecto (Supabase → Settings → API).
 </div>
@@ -231,7 +232,7 @@ function updateOfflineBanner(){
     banner.textContent = `⚠ SIN CONEXIÓN — trabajando local${pending?` (${pending} cambio(s) sin sincronizar)`:''}`;
   } else if(pending > 0){
     banner.classList.remove('hidden');
-    banner.textContent = `Sincronizando ${pending} cambio(s) pendiente(s)…`;
+    banner.textContent = `Sincronizando ${pending} cambio(s) pendiente(s)… (tocá acá para reintentar)`;
     flushQueue();
   } else {
     banner.classList.add('hidden');
@@ -264,6 +265,11 @@ async function flushQueue(){
 
 window.addEventListener('online', updateOfflineBanner);
 window.addEventListener('offline', updateOfflineBanner);
+
+function manualRetrySync(){
+  toast('Reintentando sincronización…');
+  updateOfflineBanner();
+}
 
 /* Helpers de escritura resilientes: intentan Supabase directo;
    si falla (offline / error de red) cachean local y encolan */
