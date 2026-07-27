@@ -178,7 +178,14 @@ const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBh
 
 let sb = null;
 if(SUPABASE_URL.startsWith('http') && SUPABASE_ANON_KEY.length > 20){
-  sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+  const fetchWithTimeout = (url, options = {}) => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 10000);
+    return fetch(url, {...options, signal: controller.signal}).finally(() => clearTimeout(timer));
+  };
+  sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+    global: { fetch: fetchWithTimeout }
+  });
 } else {
   document.getElementById('configWarn').classList.remove('hidden');
 }
@@ -288,22 +295,33 @@ async function dbUpsert(table, data, opts, cacheKey){
     return true;
   }
 }
+function getPendingInsertsForTable(table){
+  return getQueue().filter(op => op.table === table && op.action === 'insert').map(op => op.data);
+}
 async function dbSelect(table, queryFn, cacheKey){
+  let data = [];
   if(!sb || !navigator.onLine){
-    const cached = cacheKey ? lsGet(cacheKey) : null;
-    return cached || [];
+    data = (cacheKey ? lsGet(cacheKey) : null) || [];
+  } else {
+    try{
+      let q = sb.from(table).select('*');
+      if(queryFn) q = queryFn(q);
+      const res = await q;
+      if(res.error) throw res.error;
+      data = res.data || [];
+      if(cacheKey) lsSet(cacheKey, data);
+    }catch(e){
+      data = (cacheKey ? lsGet(cacheKey) : null) || [];
+    }
   }
-  try{
-    let q = sb.from(table).select('*');
-    if(queryFn) q = queryFn(q);
-    const {data, error} = await q;
-    if(error) throw error;
-    if(cacheKey) lsSet(cacheKey, data);
-    return data || [];
-  }catch(e){
-    const cached = cacheKey ? lsGet(cacheKey) : null;
-    return cached || [];
+  // Mezcla lo que todavía está pendiente de sincronizar, para no "perder" de vista
+  // algo recién creado mientras la sincronización sigue reintentando.
+  const pending = getPendingInsertsForTable(table);
+  for(const p of pending){
+    const already = data.find(d => (p.email && d.email === p.email) || (p.id && d.id === p.id));
+    if(!already) data.push(p);
   }
+  return data;
 }
 
 /* ===================== LOGIN ===================== */
